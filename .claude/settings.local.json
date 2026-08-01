@@ -1,7 +1,11 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python3 -c \"import numpy, scipy, pandas, matplotlib, yaml\")"
+      "Bash(python3 -c \"import numpy, scipy, pandas, matplotlib, yaml\")",
+      "Bash(unset VIRTUAL_ENV)",
+      "Bash(.venv/bin/python -m pytest -q)",
+      "Bash(.venv/bin/python -m ruff check .)",
+      "Bash(.venv/bin/python -c ' *)"
     ]
   }
 }

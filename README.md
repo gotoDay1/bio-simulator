@@ -3,8 +3,10 @@
 菌体増殖・代謝物生産・基質消費・溶存酸素消費の4つのサブモデルを組み合わせ、常微分方程式（ODE）による物質収支をバッチ／流加培養（fed-batch）／連続培養（chemostat）の3つの運転モードで解くシミュレーターです。各サブモデルは戦略パターン（抽象基底クラス＋レジストリ）で差し替え可能に設計されています。コアはUI非依存の純粋なPythonライブラリで、Streamlit製GUIはその薄いラッパーです。
 
 - コアライブラリ: `src/biosim/`
-- GUI: `app/streamlit_app.py`
-- テスト: `tests/`（pytest, 47件）
+- GUI（起動ページ）: `app/Home.py`
+- GUI（シミュレーション）: `app/pages/1_simulation.py`
+- GUI（実験データフィッティング）: `app/pages/2_fitting.py`
+- テスト: `tests/`（pytest, 77件）
 - 動作デモ: `examples/batch_monod_example.py`
 
 ## セットアップ
@@ -21,11 +23,41 @@ uv pip install --python .venv/bin/python -e ".[dev]"
 .venv/bin/python examples/batch_monod_example.py
 
 # GUI
-.venv/bin/streamlit run app/streamlit_app.py
+.venv/bin/streamlit run app/Home.py
 
 # テスト
 .venv/bin/python -m pytest
 ```
+
+---
+
+## 実測データとの比較
+
+GUIのサイドバー下部「実測データとの比較」から、1つのCSVファイルをアップロードしてシミュレーション結果と重ね描きできます（`src/biosim/experimental_data.py`）。列名は固定スキーマでパースされ、必須の `t` 列がない場合は `ExperimentalDataError` を出します。
+
+| 列名 | 必須/任意 | 内容 |
+|---|---|---|
+| `t` | 必須 | 時間 (h) |
+| `X` | 任意 | 菌体濃度・DCW (g/L) |
+| `OD` | 任意 | 濁度。`X` 列が無い場合のみ `X = OD変換係数 * OD` として `X` に換算 |
+| `S` | 任意 | 基質濃度 (g/L) |
+| `P` | 任意 | 生産物濃度 (g/L) |
+| `OTR` | 任意 | 酸素移動速度。`OxygenWithKLa`（kLaモデル）使用時のみシミュレーション側に `OTR` 列が存在 |
+
+`X`/`S`/`P`/`OTR`/`OD` はすべて任意で、1つのCSVに好きな組み合わせで含められます。存在しない列は自動的にプロットからスキップされます。ライブラリを直接使う場合は `load_experimental_csv(path, od_conversion_factor=1.0)` を呼び、返された DataFrame を `SimulationResults.to_plotly_figure(experimental_data=...)` に渡します。
+
+---
+
+## 実験データフィッティング
+
+GUIの「Fitting」ページ（`app/pages/2_fitting.py`）から、実測データに対して増殖・生産・基質・酸素の各モデルパラメータを推定できます（`src/biosim/fitting.py`）。
+
+- **複数バッチ対応**: 実測CSVを複数アップロードすると、同一のモデル・パラメータ設定を各バッチに独立にフィットし、バッチごとの推定結果を比較できます（ファイル名からバッチ名を自動生成、重複時は自動で連番付与）。
+- **パラメータごとの固定/フィット選択**: 4カテゴリ（増殖・生産・基質・酸素）それぞれについて使用するモデルを選び、各パラメータを「固定値」か「自由(推定)」（初期推定値＋上下限）のどちらにするか個別に指定できます。`Yps` のような任意パラメータは「未使用 (None)」も選べます。
+- **フィッティング方式**: 閉形式回帰ではなく、候補パラメータで実際にODEをシミュレーションし、実測時刻に補間した値との残差を `scipy.optimize.least_squares` で最小化する汎用的な simulate-and-compare 方式です。そのため `GompertzGrowth` のような力学的ODE形のモデルにもそのままフィッティングできます。
+- **CSVエクスポート**: フィッティング結果はワイド形式でエクスポートできます。列は `batch`（バッチ名）、`{カテゴリ}_model`（使用モデル名。例: `growth_model` = `gompertz`）、`{カテゴリ}_{パラメータ名}`（固定値またはフィット値の最終値。例: `growth_mu_max`）、`cost`（正規化残差のRMSE）、`success`（収束フラグ）です。
+
+ライブラリを直接使う場合は `ModelSpec`/`ParameterSpec` でモデルとパラメータ設定を組み立て、`fit_batch(...)` に実測データ（`load_experimental_csv` の戻り値と同じスキーマの DataFrame）を渡します。複数バッチの `FitResult` は `fit_results_to_dataframe(...)` でまとめてCSV化できます。
 
 ---
 
@@ -60,6 +92,8 @@ dV/dt = F_in − F_out
 | 連続培養 (`Chemostat`) | `D·V` | `D·V` | `dC/dt = r(C) + D(C_feed−C)`（教科書通りのケモスタット式）、`V` は一定 |
 
 状態ベクトルは `[X, S, P, (C_O2), V]`（`X`: 菌体, `S`: 基質, `P`: 生産物, `C_O2`: 溶存酸素 [任意], `V`: 体積）。`C_O2` は酸素モデルが供給ダイナミクス（kLa）をサポートする場合のみ状態に追加され、そうでない場合は次元を持たず、累積OURのみ診断値として報告されます（`src/biosim/state.py` の `StateLayout` が可変長の状態ベクトルを動的に管理）。
+
+流加培養のフィードプロファイル `F(t)` はGUI上で `constant`（一定）・`step`（単一ステップ）・`exponential`（指数関数、`mu_set` 一定を狙うfeed-forward）・`csv`（多段階ステップ、任意個数のブレークポイント）から選べます。`csv` は `time`（h）・`feed_rate`（L/h）の2列を持つCSVをアップロードし、ブレークポイント間を階段状（ステップホールド）で保持します。最初のブレークポイントより前はCSV1行目の値、最後のブレークポイントより後は最終行の値をそのまま保持します（`stepwise_feed`/`load_feed_profile_csv`、`src/biosim/operation_modes.py`・`src/biosim/feed_profile.py`）。
 
 各カテゴリのモデルは以下の順序で呼び出され、依存関係が解決されます: **増殖 → 生産 → 基質 → 酸素**（生産・基質・酸素の速度式は増殖モデルが計算した `dX/dt` に依存するため）。
 
@@ -96,7 +130,7 @@ dV/dt = F_in − F_out
 μ(X) = μ_max · ln(Xmax / X)
 ```
 
-⚠️ **注意**: これはODE（物質収支）に組み込むための**力学的Gompertz式**であり、実験データの終点フィッティングに使われる閉形式回帰曲線 `X(t) = Xmax·exp(−exp(...))` とは異なります。上式を `dX/dt = μ·X` に代入すると `dX/dt = μ_max·X·ln(Xmax/X)` となり、これがGompertz型の非対称S字増殖曲線を与える標準的な力学モデルです。
+⚠️ **注意**: これはODE（物質収支）に組み込むための**力学的Gompertz式**であり、実験データの終点フィッティングに使われる閉形式回帰曲線 `X(t) = Xmax·exp(−exp(...))` とは異なります。上式を `dX/dt = μ·X` に代入すると `dX/dt = μ_max·X·ln(Xmax/X)` となり、これがGompertz型の非対称S字増殖曲線を与える標準的な力学モデルです。simulate-and-compare方式の[実験データフィッティング](#実験データフィッティング)機能は、閉形式解を必要としないため、この力学的形のまま `μ_max`/`Xmax` を実測データから推定できます。
 
 境界値の扱い: `X ≤ 0` または `X ≥ Xmax` のとき `ln` が未定義／負になるため、実装では `μ=0` にクリップしています。
 
@@ -184,5 +218,6 @@ dC_O2/dt = OTR + OUR + (F_in/V)·(C_O2_feed − C_O2)
 ## 既知の制限（v1スコープ）
 
 - 基質・酸素の維持代謝項は枯渇後もそのまま作用し続けるため、長時間シミュレーションで濃度が数値的に負になり得ます（警告を出しますが、クリップやイベント停止は行いません）。
-- Gompertzモデルは力学的ODE形であり、実験データへの回帰フィッティング機能は含みません。
+- 実験データフィッティングは、同一バッチグループ内の全バッチで初期条件・運転モードを共有する前提です（バッチごとに異なる初期条件を自動設定する機能は含みません）。
 - 複数シナリオの重ね合わせ比較・DB永続化・認証などはGUIのv1スコープ外です。
+- 流加プロファイルCSV（`csv` プロファイル）でブレークポイントが密（時間間隔が非常に短い箇所が多数）な場合、ステップ状の不連続性によりLSODAの積分が遅くなることがあります。`max_step` 等のソルバーチューニングは現状GUI/APIから公開していません。

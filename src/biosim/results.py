@@ -14,8 +14,21 @@ class SimulationResults:
     def to_csv(self, path: str) -> None:
         self.data.to_csv(path, index=False)
 
-    def to_plotly_figure(self) -> go.Figure:
+    def to_plotly_figure(self, experimental_data: pd.DataFrame | None = None) -> go.Figure:
+        """Build the multi-panel time-series figure.
+
+        experimental_data is an optional measured-data overlay (from
+        biosim.experimental_data.load_experimental_csv, columns `t` plus any subset of
+        `X`/`S`/`P`/`OTR`). Each measured column is plotted as markers on top of the
+        matching simulated line; columns not present in experimental_data are skipped.
+        """
         plot_columns = [c for c in self.data.columns if c != "t"]
+        overlay_columns = (
+            [c for c in plot_columns if c in experimental_data.columns]
+            if experimental_data is not None
+            else []
+        )
+
         fig = make_subplots(
             rows=len(plot_columns),
             cols=1,
@@ -28,6 +41,19 @@ class SimulationResults:
                 row=i,
                 col=1,
             )
+            if col in overlay_columns:
+                measured = experimental_data[["t", col]].dropna(subset=[col])
+                fig.add_trace(
+                    go.Scatter(
+                        x=measured["t"],
+                        y=measured[col],
+                        mode="markers",
+                        name=f"{col} (measured)",
+                        marker={"symbol": "circle-open", "size": 8},
+                    ),
+                    row=i,
+                    col=1,
+                )
         fig.update_xaxes(title_text="time (h)", row=len(plot_columns), col=1)
-        fig.update_layout(height=250 * len(plot_columns), showlegend=False)
+        fig.update_layout(height=250 * len(plot_columns), showlegend=bool(overlay_columns))
         return fig

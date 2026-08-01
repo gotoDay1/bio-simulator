@@ -1,10 +1,10 @@
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import streamlit as st
-from ui_components import render_param_inputs
+from ui_components import render_feed_profile_inputs, render_param_inputs
 
 from biosim import (
     GROWTH_MODELS,
@@ -14,13 +14,12 @@ from biosim import (
     Batch,
     BioreactorSimulation,
     Chemostat,
+    ExperimentalDataError,
     FedBatch,
     InitialConditions,
     IntegrationError,
     InvalidParameterError,
-    constant_feed,
-    exponential_feed,
-    step_feed,
+    load_experimental_csv,
 )
 
 st.set_page_config(page_title="Bioreactor Simulator", layout="wide")
@@ -32,23 +31,7 @@ with st.sidebar:
 
     mode_kwargs: dict = {}
     if mode_choice == "fed_batch":
-        st.subheader("流加培養パラメータ")
-        profile_choice = st.selectbox(
-            "フィードプロファイル", ["constant", "step", "exponential"]
-        )
-        if profile_choice == "constant":
-            rate = st.number_input("フィード流量 F (L/h)", value=0.05, min_value=0.0)
-            feed_rate_fn = constant_feed(rate)
-        elif profile_choice == "step":
-            t_start = st.number_input("開始時刻 t_start (h)", value=2.0, min_value=0.0)
-            rate = st.number_input("フィード流量 F (L/h)", value=0.05, min_value=0.0)
-            feed_rate_fn = step_feed(t_start=t_start, rate=rate)
-        else:
-            F0 = st.number_input("初期フィード流量 F0 (L/h)", value=0.02, min_value=0.0)
-            mu_set = st.number_input("目標比増殖速度 mu_set (1/h)", value=0.1)
-            feed_rate_fn = exponential_feed(F0=F0, mu_set=mu_set)
-        S_feed = st.number_input("フィード基質濃度 S_feed (g/L)", value=100.0, min_value=0.0)
-        mode_kwargs = {"feed_rate_fn": feed_rate_fn, "S_feed": S_feed}
+        mode_kwargs = render_feed_profile_inputs("feed")
     elif mode_choice == "chemostat":
         st.subheader("連続培養パラメータ")
         D = st.number_input("希釈率 D (1/h)", value=0.1, min_value=0.0001)
@@ -88,6 +71,26 @@ with st.sidebar:
 
     run_clicked = st.button("シミュレーション実行", type="primary")
 
+    st.header("実測データとの比較（任意）")
+    experimental_data = None
+    experimental_file = st.file_uploader(
+        "実測データCSV（固定列名: t + X/OD/S/P/OTR のうち存在する列）",
+        type="csv",
+        key="experimental_csv",
+    )
+    if experimental_file is not None:
+        od_conversion_factor = st.number_input(
+            "OD→X 変換係数（OD列がある場合のみ使用, X = 係数 * OD）",
+            value=1.0,
+            key="od_conversion_factor",
+        )
+        try:
+            experimental_data = load_experimental_csv(
+                experimental_file, od_conversion_factor=od_conversion_factor
+            )
+        except ExperimentalDataError as e:
+            st.error(str(e))
+
 if run_clicked:
     try:
         growth_model = GROWTH_MODELS[growth_choice](**growth_kwargs)
@@ -98,6 +101,10 @@ if run_clicked:
         if mode_choice == "batch":
             operation_mode = Batch()
         elif mode_choice == "fed_batch":
+            if mode_kwargs.get("feed_rate_fn") is None:
+                raise InvalidParameterError(
+                    "フィードプロファイルCSVをアップロードするか、有効なプロファイルを選択してください。"
+                )
             operation_mode = FedBatch(**mode_kwargs)
         else:
             operation_mode = Chemostat(**mode_kwargs)
@@ -125,7 +132,8 @@ if st.session_state.get("error"):
 
 results = st.session_state.get("results")
 if results is not None:
-    st.plotly_chart(results.to_plotly_figure(), width="stretch")
+    fig = results.to_plotly_figure(experimental_data=experimental_data)
+    st.plotly_chart(fig, width="stretch")
 
     csv_bytes = results.data.to_csv(index=False).encode("utf-8")
     st.download_button(

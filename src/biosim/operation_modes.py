@@ -1,9 +1,12 @@
 import math
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import ClassVar
 
+import numpy as np
+
+from biosim.exceptions import InvalidParameterError
 from biosim.validation import require_nonnegative, require_positive
 
 
@@ -46,7 +49,8 @@ class Batch(OperationMode):
 class FedBatch(OperationMode):
     """Feed added via a user-supplied flow-rate profile; volume grows, no outflow.
 
-    feed_rate_fn: F_in(t) in L/h (see constant_feed/step_feed/exponential_feed helpers)
+    feed_rate_fn: F_in(t) in L/h (see constant_feed/step_feed/exponential_feed/stepwise_feed
+        helpers)
     S_feed: substrate concentration in the feed stream (g/L)
     """
 
@@ -116,5 +120,37 @@ def exponential_feed(F0: float, mu_set: float) -> Callable[[float], float]:
 
     def _feed(t: float) -> float:
         return F0 * math.exp(mu_set * t)
+
+    return _feed
+
+
+def stepwise_feed(times: Sequence[float], rates: Sequence[float]) -> Callable[[float], float]:
+    """F_in(t): piecewise-constant (step-hold) profile through multiple (time, rate) breakpoints.
+
+    For t <= times[0], F_in = rates[0] (holds the first rate, unlike step_feed which
+    defaults to 0 before t_start). For times[i] <= t < times[i+1], F_in = rates[i] (a
+    new rate takes effect at its breakpoint, inclusive - matching step_feed's t >= t_start
+    convention). For t >= times[-1], F_in = rates[-1] (flat extrapolation). A single
+    breakpoint is allowed and behaves like constant_feed.
+    """
+    if len(times) != len(rates):
+        raise InvalidParameterError(
+            f"times and rates must have equal length, got {len(times)} and {len(rates)}"
+        )
+    if len(times) == 0:
+        raise InvalidParameterError("stepwise_feed requires at least one (time, rate) breakpoint")
+
+    times_arr = np.asarray(times, dtype=float)
+    rates_arr = np.asarray(rates, dtype=float)
+    if np.any(np.diff(times_arr) <= 0):
+        raise InvalidParameterError(
+            "times must be strictly increasing (no duplicate or decreasing timestamps)"
+        )
+    if np.any(rates_arr < 0):
+        raise InvalidParameterError("feed rates must be >= 0")
+
+    def _feed(t: float) -> float:
+        idx = np.searchsorted(times_arr, t, side="right") - 1
+        return float(rates_arr[max(idx, 0)])
 
     return _feed
