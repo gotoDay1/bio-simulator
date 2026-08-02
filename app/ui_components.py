@@ -57,6 +57,38 @@ def render_param_inputs(model_cls: type, key_prefix: str) -> dict:
     return kwargs
 
 
+def render_uncovered_param_inputs(
+    model_cls: type, predicted_field_names: set[str], key_prefix: str
+) -> dict:
+    """Like render_param_inputs, but only renders fields NOT in predicted_field_names
+    (fields already covered by a trained parameter-prediction GP need no manual input).
+    """
+    kwargs: dict = {}
+    for f in dataclasses.fields(model_cls):
+        if f.name in SKIP_FIELDS or f.name in predicted_field_names:
+            continue
+
+        has_default = f.default is not dataclasses.MISSING
+        fallback = 0.1
+        default_val = float(f.default) if has_default and f.default is not None else fallback
+
+        if _is_optional_float(f.type):
+            enabled = st.checkbox(
+                f"{f.name} を使用する", value=False, key=f"{key_prefix}_{f.name}_enabled"
+            )
+            if enabled:
+                kwargs[f.name] = st.number_input(
+                    f.name, value=default_val, key=f"{key_prefix}_{f.name}"
+                )
+            else:
+                kwargs[f.name] = None
+        else:
+            kwargs[f.name] = st.number_input(
+                f.name, value=default_val, key=f"{key_prefix}_{f.name}"
+            )
+    return kwargs
+
+
 def render_fit_param_inputs(model_cls: type, key_prefix: str) -> list[ParameterSpec]:
     """Render fixed/free controls for each dataclass field and return the resulting specs.
 

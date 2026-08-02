@@ -11,7 +11,7 @@ from biosim.results import SimulationResults
 from biosim.simulation import BioreactorSimulation
 from biosim.state import InitialConditions
 
-_CATEGORY_ORDER = ("growth", "product", "substrate", "oxygen")
+CATEGORY_ORDER = ("growth", "product", "substrate", "oxygen")
 _MEASUREMENT_COLUMNS = ("X", "S", "P")
 _PENALTY_RESIDUAL_VALUE = 1e6
 
@@ -95,11 +95,11 @@ def fit_batch(
     (e.g. GompertzGrowth, which is a mechanistic ODE form).
     """
     specs_by_category = {spec.category: spec for spec in model_specs}
-    missing = [c for c in _CATEGORY_ORDER if c not in specs_by_category]
+    missing = [c for c in CATEGORY_ORDER if c not in specs_by_category]
     if missing:
         raise FittingError(f"Missing model specs for categories: {missing}")
 
-    for category in _CATEGORY_ORDER:
+    for category in CATEGORY_ORDER:
         spec = specs_by_category[category]
         expected_names = {
             f.name for f in dataclasses.fields(spec.model_cls) if f.name != "feed_rate_fn"
@@ -115,7 +115,7 @@ def fit_batch(
     x0: list[float] = []
     lower: list[float] = []
     upper: list[float] = []
-    for category in _CATEGORY_ORDER:
+    for category in CATEGORY_ORDER:
         spec = specs_by_category[category]
         for i, p in enumerate(spec.params):
             if not p.fixed:
@@ -168,7 +168,7 @@ def fit_batch(
 
     def _build_kwargs(x: np.ndarray) -> dict[str, dict]:
         kwargs_by_category: dict[str, dict] = {}
-        for category in _CATEGORY_ORDER:
+        for category in CATEGORY_ORDER:
             spec = specs_by_category[category]
             kwargs_by_category[category] = {p.name: p.value for p in spec.params if p.fixed}
         for (category, i), xi in zip(free_index_map, x, strict=True):
@@ -228,10 +228,10 @@ def fit_batch(
 
     kwargs_by_category = _build_kwargs(opt.x)
     param_values: dict[str, dict[str, float | None]] = {
-        category: dict(kwargs_by_category[category]) for category in _CATEGORY_ORDER
+        category: dict(kwargs_by_category[category]) for category in CATEGORY_ORDER
     }
     model_names = {
-        category: specs_by_category[category].model_cls.name for category in _CATEGORY_ORDER
+        category: specs_by_category[category].model_cls.name for category in CATEGORY_ORDER
     }
     cost = float(np.sqrt(np.mean(opt.fun**2)))
 
@@ -253,7 +253,7 @@ def fit_results_to_dataframe(results: list[FitResult]) -> pd.DataFrame:
     rows = []
     for r in results:
         row: dict[str, object] = {"batch": r.batch_name}
-        for category in _CATEGORY_ORDER:
+        for category in CATEGORY_ORDER:
             row[f"{category}_model"] = r.model_names[category]
             for name, value in r.param_values[category].items():
                 row[f"{category}_{name}"] = value

@@ -20,3 +20,12 @@ class FeedProfileError(BiosimError):
 
 class FittingError(BiosimError):
     """Raised when a fitting configuration or run is invalid."""
+
+
+class PredictionError(BiosimError):
+    """Raised when a parameter-prediction (Gaussian Process regression) configuration or run
+    is invalid."""
+
+
+class ExperimentDesignError(BiosimError):
+    """Raised when a next-experiment-suggestion configuration or run is invalid."""
