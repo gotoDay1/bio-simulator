@@ -28,7 +28,7 @@ from biosim.fitting import (
     fit_results_to_dataframe,
 )
 from biosim.models.base import GrowthModel, OxygenModel, ProductModel, SubstrateModel
-from biosim.models.growth import GompertzGrowth, LogisticGrowth, MonodGrowth
+from biosim.models.growth import GompertzGrowth, LogisticGrowth, MonodGrowth, MonodGrowthO2
 from biosim.models.oxygen import OxygenDemandOnly, OxygenWithKLa
 from biosim.models.product import LuedekingPiretProduct, NoProduct
 from biosim.models.registry import (
@@ -88,6 +88,7 @@ __all__ = [
     "LuedekingPiretProduct",
     "ModelSpec",
     "MonodGrowth",
+    "MonodGrowthO2",
     "NoProduct",
     "OperationMode",
     "OxygenDemandOnly",

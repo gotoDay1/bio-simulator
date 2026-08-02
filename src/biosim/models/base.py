@@ -3,12 +3,20 @@ from typing import ClassVar
 
 
 class GrowthModel(ABC):
-    """Returns the specific growth rate mu (1/h); dX/dt = mu * X is computed by the orchestrator."""
+    """Returns the specific growth rate mu (1/h); dX/dt = mu * X is computed by the orchestrator.
+
+    requires_oxygen_state indicates whether this model needs the current dissolved-O2
+    concentration (C_O2) to compute mu. When True, the orchestrator rejects pairing this
+    growth model with an oxygen model that doesn't track C_O2 (supports_supply_dynamics=False).
+    """
 
     name: ClassVar[str]
+    requires_oxygen_state: ClassVar[bool] = False
 
     @abstractmethod
-    def specific_growth_rate(self, X: float, S: float, t: float) -> float:
+    def specific_growth_rate(
+        self, X: float, S: float, t: float, C_O2: float | None = None
+    ) -> float:
         ...
 
 

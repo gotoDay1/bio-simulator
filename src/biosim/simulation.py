@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 from scipy.integrate import solve_ivp
 
-from biosim.exceptions import IntegrationError
+from biosim.exceptions import IntegrationError, InvalidParameterError
 from biosim.models.base import GrowthModel, OxygenModel, ProductModel, SubstrateModel
 from biosim.operation_modes import OperationMode
 from biosim.results import SimulationResults
@@ -44,12 +44,18 @@ class BioreactorSimulation:
         self.t_span = t_span
         self.n_points = n_points
         self.solver_kwargs = solver_kwargs or {}
+        if growth_model.requires_oxygen_state and not oxygen_model.supports_supply_dynamics:
+            raise InvalidParameterError(
+                f"{type(growth_model).__name__} requires an oxygen model that tracks "
+                f"dissolved-O2 supply dynamics (e.g. OxygenWithKLa), but "
+                f"{type(oxygen_model).__name__} does not track C_O2 as a state."
+            )
         self.layout = StateLayout(oxygen_model.supports_supply_dynamics)
 
     def _rhs(self, t: float, y: np.ndarray) -> np.ndarray:
         X, S, P, C_O2, V = self.layout.unpack(y)
 
-        mu = self.growth_model.specific_growth_rate(X, S, t)
+        mu = self.growth_model.specific_growth_rate(X, S, t, C_O2)
         dXdt_rxn = mu * X
         dPdt_rxn = self.product_model.production_rate(X, P, dXdt_rxn, t)
         dSdt_rxn = self.substrate_model.consumption_rate(X, dXdt_rxn, dPdt_rxn, t)
@@ -61,15 +67,39 @@ class BioreactorSimulation:
 
         dydt = np.zeros_like(y)
         dydt[self.layout.idx_X] = dXdt_rxn + dilution * (self.operation_mode.X_feed - X)
-        dydt[self.layout.idx_S] = dSdt_rxn + dilution * (self.operation_mode.S_feed - S)
+
+        dS = dSdt_rxn + dilution * (self.operation_mode.S_feed - S)
+        dydt[self.layout.idx_S] = self._floor_rate_near_zero(S, dS)
+
         dydt[self.layout.idx_P] = dPdt_rxn + dilution * (self.operation_mode.P_feed - P)
         if self.layout.has_oxygen_state:
             otr = self.oxygen_model.supply_rate(C_O2, t)
-            dydt[self.layout.idx_C_O2] = our + otr + dilution * (
-                self.operation_mode.C_O2_feed - C_O2
-            )
+            dC_O2 = our + otr + dilution * (self.operation_mode.C_O2_feed - C_O2)
+            dydt[self.layout.idx_C_O2] = self._floor_rate_near_zero(C_O2, dC_O2)
         dydt[self.layout.idx_V] = F_in - F_out
         return dydt
+
+    _RATE_FLOOR_EPS = 1e-6
+
+    @classmethod
+    def _floor_rate_near_zero(cls, state: float, rate: float) -> float:
+        """Keeps a depleting state (S or C_O2) from going negative without introducing a
+        hard discontinuity in the ODE right-hand side.
+
+        A plain `if state <= 0: rate = 0` clamp creates a genuine jump discontinuity at the
+        boundary (the unclamped rate does not vanish as state -> 0, since maintenance terms
+        like -ms*X are independent of the depleting state itself), which adaptive stiff
+        solvers such as LSODA resolve very poorly - integration calls near/after depletion
+        can become orders of magnitude slower (observed in fitting, which repeatedly
+        integrates many nearby parameter sets). Instead, a negative rate is linearly ramped
+        to zero over the tiny window [0, eps], matching the unclamped rate continuously at
+        `state=eps` and reaching exactly zero at `state=0`; the state can never cross zero
+        and the vector field stays continuous everywhere.
+        """
+        if rate >= 0.0 or state >= cls._RATE_FLOOR_EPS:
+            return rate
+        blend = max(state, 0.0) / cls._RATE_FLOOR_EPS
+        return rate * blend
 
     def run(self) -> SimulationResults:
         y0 = self.layout.build_initial_vector(self.initial_conditions)
@@ -97,7 +127,7 @@ class BioreactorSimulation:
         for i in range(n):
             X, S, _P, C_O2, _V = self.layout.unpack(sol.y[:, i])
             t = sol.t[i]
-            mu = self.growth_model.specific_growth_rate(X, S, t)
+            mu = self.growth_model.specific_growth_rate(X, S, t, C_O2)
             mu_vals[i] = mu
             our_vals[i] = self.oxygen_model.demand_rate(X, mu * X, t)
             if otr_vals is not None:
@@ -118,8 +148,13 @@ class BioreactorSimulation:
             if col in df.columns and (df[col] < tol).any():
                 warnings.warn(
                     f"Simulated '{col}' went negative (min={df[col].min():.4g}). "
-                    "This is a known artifact of maintenance/consumption terms that "
-                    "keep acting after a substrate/oxygen is depleted; results after "
-                    "depletion should be interpreted with that in mind.",
+                    "'S' and 'C_O2' are floored near zero once depleted (their consumption "
+                    "rate is smoothly ramped to zero as they approach zero, see "
+                    "_floor_rate_near_zero), so more than a tiny numerical undershoot here "
+                    "is an unexpected artifact rather than expected maintenance-term "
+                    "behavior; results should be inspected. "
+                    "Note that non-growth-associated product formation (the beta*X term "
+                    "in LuedekingPiretProduct) is not gated by substrate/oxygen depletion "
+                    "and keeps producing 'P' as long as biomass is present.",
                     stacklevel=2,
                 )

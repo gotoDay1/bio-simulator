@@ -2,7 +2,13 @@ import math
 
 import pytest
 
-from biosim import GompertzGrowth, InvalidParameterError, LogisticGrowth, MonodGrowth
+from biosim import (
+    GompertzGrowth,
+    InvalidParameterError,
+    LogisticGrowth,
+    MonodGrowth,
+    MonodGrowthO2,
+)
 
 
 class TestMonodGrowth:
@@ -29,6 +35,48 @@ class TestMonodGrowth:
             MonodGrowth(mu_max=0.0, Ks=0.2)
         with pytest.raises(InvalidParameterError):
             MonodGrowth(mu_max=0.6, Ks=-0.1)
+
+
+class TestMonodGrowthO2:
+    def test_exact_formula(self):
+        model = MonodGrowthO2(mu_max=0.6, Ks=0.2, Ko2=0.2)
+        mu = model.specific_growth_rate(X=1.0, S=1.0, t=0.0, C_O2=1.0)
+        assert mu == pytest.approx(0.6 * (1.0 / 1.2) * (1.0 / 1.2))
+
+    def test_zero_at_zero_substrate(self):
+        model = MonodGrowthO2(mu_max=0.6, Ks=0.2, Ko2=0.2)
+        assert model.specific_growth_rate(X=1.0, S=0.0, t=0.0, C_O2=5.0) == 0.0
+
+    def test_zero_at_zero_oxygen(self):
+        model = MonodGrowthO2(mu_max=0.6, Ks=0.2, Ko2=0.2)
+        assert model.specific_growth_rate(X=1.0, S=1000.0, t=0.0, C_O2=0.0) == 0.0
+
+    def test_none_oxygen_treated_as_depleted(self):
+        model = MonodGrowthO2(mu_max=0.6, Ks=0.2, Ko2=0.2)
+        assert model.specific_growth_rate(X=1.0, S=1000.0, t=0.0, C_O2=None) == 0.0
+
+    def test_approaches_plain_monod_when_oxygen_abundant(self):
+        model = MonodGrowthO2(mu_max=0.6, Ks=0.2, Ko2=0.2)
+        plain = MonodGrowth(mu_max=0.6, Ks=0.2)
+        mu_o2 = model.specific_growth_rate(X=1.0, S=1.0, t=0.0, C_O2=1000.0)
+        mu_plain = plain.specific_growth_rate(X=1.0, S=1.0, t=0.0)
+        assert mu_o2 == pytest.approx(mu_plain, rel=1e-3)
+
+    def test_monotonically_increasing_in_oxygen(self):
+        model = MonodGrowthO2(mu_max=0.6, Ks=0.2, Ko2=0.2)
+        mus = [
+            model.specific_growth_rate(X=1.0, S=10.0, t=0.0, C_O2=c)
+            for c in (0.0, 0.1, 1.0, 10.0)
+        ]
+        assert mus == sorted(mus)
+
+    def test_rejects_invalid_params(self):
+        with pytest.raises(InvalidParameterError):
+            MonodGrowthO2(mu_max=0.0, Ks=0.2, Ko2=0.2)
+        with pytest.raises(InvalidParameterError):
+            MonodGrowthO2(mu_max=0.6, Ks=-0.1, Ko2=0.2)
+        with pytest.raises(InvalidParameterError):
+            MonodGrowthO2(mu_max=0.6, Ks=0.2, Ko2=0.0)
 
 
 class TestLogisticGrowth:
