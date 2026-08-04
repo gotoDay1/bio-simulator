@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -19,6 +20,7 @@ from biosim import (
     fit_results_to_dataframe,
     stepwise_feed,
 )
+from biosim.fitting import _generate_start_points
 
 
 def _simulate(growth_model, initial_conditions, t_span=(0.0, 20.0), n_points=150, **overrides):
@@ -269,3 +271,109 @@ def test_fit_batch_multi_batch_independent_results():
     assert results[1].success
     assert results[0].param_values["growth"]["mu_max"] == pytest.approx(0.5, rel=0.15)
     assert results[1].param_values["growth"]["mu_max"] == pytest.approx(0.7, rel=0.15)
+
+
+def test_generate_start_points_first_candidate_is_x0():
+    x0 = np.array([0.3, 0.5])
+    lower = np.array([0.0, 0.0])
+    upper = np.array([5.0, 5.0])
+
+    starts = _generate_start_points(x0, lower, upper, n_starts=5)
+
+    assert len(starts) == 5
+    assert np.array_equal(starts[0], x0)
+
+
+def test_generate_start_points_single_start_is_just_x0():
+    x0 = np.array([0.3, 0.5])
+    lower = np.array([0.0, 0.0])
+    upper = np.array([5.0, 5.0])
+
+    starts = _generate_start_points(x0, lower, upper, n_starts=1)
+
+    assert len(starts) == 1
+    assert np.array_equal(starts[0], x0)
+
+
+def test_generate_start_points_stay_within_bounds():
+    x0 = np.array([0.3, 0.5])
+    lower = np.array([0.1, 0.2])
+    upper = np.array([1.0, 0.6])
+
+    starts = _generate_start_points(x0, lower, upper, n_starts=20)
+
+    for start in starts:
+        assert np.all(start >= lower)
+        assert np.all(start <= upper)
+
+
+def test_generate_start_points_is_reproducible():
+    x0 = np.array([0.3, 0.5])
+    lower = np.array([0.0, 0.0])
+    upper = np.array([5.0, 5.0])
+
+    starts_a = _generate_start_points(x0, lower, upper, n_starts=6)
+    starts_b = _generate_start_points(x0, lower, upper, n_starts=6)
+
+    for a, b in zip(starts_a, starts_b, strict=True):
+        assert np.array_equal(a, b)
+
+
+def test_fit_batch_rejects_non_positive_n_starts():
+    ic = InitialConditions(X0=0.1, S0=4.0, P0=0.0, V0=1.0)
+    experimental_data = _simulate(MonodGrowth(), ic)[["t", "X"]]
+
+    model_specs = [
+        ModelSpec("growth", MonodGrowth, [_free("mu_max", guess=0.3), _fixed("Ks", 0.2)]),
+        *_default_non_growth_specs(),
+    ]
+
+    with pytest.raises(FittingError, match="n_starts"):
+        fit_batch(
+            batch_name="batch1",
+            model_specs=model_specs,
+            initial_conditions=ic,
+            operation_mode=Batch(),
+            experimental_data=experimental_data,
+            n_starts=0,
+        )
+
+
+def test_fit_batch_multi_start_never_worse_than_single_start():
+    """Multi-start always includes the user's own x0 as a candidate, so its best cost can
+    only match or improve on a single-start fit from that same x0 - never regress."""
+    true_growth = MonodGrowth(mu_max=0.6, Ks=0.05)
+    ic = InitialConditions(X0=0.05, S0=4.0, P0=0.0, V0=1.0)
+    data = _simulate(true_growth, ic)
+    experimental_data = data[["t", "X", "S"]]
+
+    # Deliberately poor initial guesses, far from the true values.
+    model_specs = [
+        ModelSpec(
+            "growth",
+            MonodGrowth,
+            [_free("mu_max", guess=0.05, upper=5.0), _free("Ks", guess=2.0, upper=5.0)],
+        ),
+        *_default_non_growth_specs(),
+    ]
+
+    single = fit_batch(
+        batch_name="batch1",
+        model_specs=model_specs,
+        initial_conditions=ic,
+        operation_mode=Batch(),
+        experimental_data=experimental_data,
+        n_starts=1,
+    )
+    multi = fit_batch(
+        batch_name="batch1",
+        model_specs=model_specs,
+        initial_conditions=ic,
+        operation_mode=Batch(),
+        experimental_data=experimental_data,
+        n_starts=8,
+    )
+
+    assert multi.cost <= single.cost + 1e-12
+    assert "best of 8 starts" in multi.message
+    assert "best of" not in single.message

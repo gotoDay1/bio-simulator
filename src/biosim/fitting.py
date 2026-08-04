@@ -79,6 +79,26 @@ class FitResult:
     simulation_results: SimulationResults | None
 
 
+def _generate_start_points(
+    x0: np.ndarray, lower: np.ndarray, upper: np.ndarray, n_starts: int
+) -> list[np.ndarray]:
+    """Build n_starts candidate starting points for multi-start optimization.
+
+    Candidate 0 is always x0 itself, so multi-start can only match or improve on a
+    single-start fit from the user's own initial guess. The rest are log-space
+    multiplicative jitters of x0 (0.1x-10x per free parameter, independently),
+    clipped into bounds, using a fixed seed so the same inputs always fit the same way.
+    """
+    starts = [x0]
+    if n_starts > 1:
+        rng = np.random.default_rng(0)
+        for _ in range(n_starts - 1):
+            factors = 10.0 ** rng.uniform(-1.0, 1.0, size=x0.shape)
+            candidate = np.clip(x0 * factors, lower, upper)
+            starts.append(candidate)
+    return starts
+
+
 def fit_batch(
     batch_name: str,
     model_specs: list[ModelSpec],
@@ -86,6 +106,7 @@ def fit_batch(
     operation_mode: OperationMode,
     experimental_data: pd.DataFrame,
     n_points: int = 200,
+    n_starts: int = 8,
 ) -> FitResult:
     """Fit the free parameters of model_specs against experimental_data for one batch.
 
@@ -93,6 +114,11 @@ def fit_batch(
     the experimental time points -> normalized residual) rather than closed-form regression,
     so it works for any registered model regardless of whether it has a closed-form solution
     (e.g. GompertzGrowth, which is a mechanistic ODE form).
+
+    n_starts controls multi-start optimization: least_squares is a local optimizer, so a
+    single run from one initial guess can settle into a local minimum (common with
+    correlated parameters like Monod's mu_max/Ks). n_starts >= 1 candidate starting points
+    are tried (see _generate_start_points) and the lowest-cost result is kept.
     """
     specs_by_category = {spec.category: spec for spec in model_specs}
     missing = [c for c in CATEGORY_ORDER if c not in specs_by_category]
@@ -215,10 +241,20 @@ def fit_batch(
             parts.append((sim_interp - y_meas) / scale)
         return np.concatenate(parts)
 
-    opt = least_squares(residual, x0_arr, bounds=(lower_arr, upper_arr), max_nfev=2000)
+    if n_starts < 1:
+        raise FittingError(f"n_starts must be >= 1 (got {n_starts}).")
+
+    start_points = _generate_start_points(x0_arr, lower_arr, upper_arr, n_starts)
+    opt = None
+    for start in start_points:
+        candidate = least_squares(residual, start, bounds=(lower_arr, upper_arr), max_nfev=2000)
+        if opt is None or candidate.cost < opt.cost:
+            opt = candidate
 
     success = bool(opt.success)
     message = str(opt.message)
+    if n_starts > 1:
+        message = f"{message} (best of {n_starts} starts)"
     try:
         simulation_results: SimulationResults | None = _build_simulation(opt.x).run()
     except (InvalidParameterError, IntegrationError) as exc:

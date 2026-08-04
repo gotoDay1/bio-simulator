@@ -104,6 +104,18 @@ with st.sidebar:
         step=10,
         key="fit_n_points",
     )
+    n_starts = st.number_input(
+        "マルチスタート回数",
+        value=8,
+        min_value=1,
+        max_value=50,
+        step=1,
+        key="fit_n_starts",
+        help=(
+            "初期推定値の周辺を複数点サンプリングしてそれぞれ最適化し、"
+            "最良の結果を採用します（局所解への収束を避けるため）。"
+        ),
+    )
 
     st.header("実験データ（複数バッチ可）")
     od_conversion_factor = st.number_input(
@@ -173,6 +185,7 @@ if run_clicked:
                             operation_mode=operation_mode,
                             experimental_data=experimental_data,
                             n_points=int(n_points),
+                            n_starts=int(n_starts),
                         )
                         fit_results.append(result)
                         experimental_by_batch[batch_name] = experimental_data
